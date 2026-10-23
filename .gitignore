@@ -16,3 +16,14 @@ __pycache__/
 # Notebooks e configurações do editor
 .ipynb_checkpoints/
 .vscode/
+
+# dbt: artefatos gerados
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+
+# Logs do pipeline
+*.log
+
+# Arquivos de apoio fora do projeto
+Claude outputs/
