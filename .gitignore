@@ -1,0 +1,18 @@
+# Dados do ENEM: arquivos enormes, não vão para o GitHub
+data/*
+!data/.gitkeep
+
+# Credenciais (senha do PostgreSQL)
+.env
+
+# Ambiente virtual do Python
+venv/
+.venv/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Notebooks e configurações do editor
+.ipynb_checkpoints/
+.vscode/
