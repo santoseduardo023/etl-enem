@@ -1,15 +1,15 @@
-# Dados do ENEM: arquivos enormes, não vão para o GitHub
+# Dados do ENEM
 data/*
 !data/.gitkeep
 
-# Credenciais (senha do PostgreSQL)
+# Credenciais
 .env
 
-# Ambiente virtual do Python
+# Ambiente virtual
 venv/
 .venv/
 
-# Cache do Python
+# Cache
 __pycache__/
 *.pyc
 
@@ -24,6 +24,3 @@ dbt/dbt_packages/
 
 # Logs do pipeline
 *.log
-
-# Arquivos de apoio fora do projeto
-Claude outputs/
