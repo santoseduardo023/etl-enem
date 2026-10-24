@@ -1,0 +1,20 @@
+[project]
+name = "enem-pipeline"
+version = "0.1.0"
+description = "Pipeline ETL dos microdados do ENEM 2024-2025 para PostgreSQL (medallion + dbt)"
+readme = "README.md"
+authors = [
+    { name = "Eduardo da Silva", email = "270822660+santoseduardo023@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg[binary]>=3.3.6",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+enem-pipeline = "enem_pipeline.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
