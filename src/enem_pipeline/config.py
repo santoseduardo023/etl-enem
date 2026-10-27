@@ -1,4 +1,4 @@
-"""Configuração: lê credenciais do .env e parâmetros do pipeline (anos, URLs, pastas)."""
+"""Configuração do pipeline: credenciais do banco (.env), pastas de dados e URLs do INEP."""
 
 import os
 from dataclasses import dataclass, field
@@ -6,11 +6,14 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Raiz do projeto: config.py -> enem_pipeline -> src -> etl-enem
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = PROJECT_ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
+EXTRACTED_DIR = DATA_DIR / "extracted"
 
-# Carrega as variáveis do .env para o ambiente do processo
-load_dotenv(PROJECT_ROOT / ".env")
+ENEM_URLS = {
+    2025: "https://download.inep.gov.br/microdados/microdados_enem_2025.zip",
+}
 
 REQUIRED_VARS = (
     "POSTGRES_HOST",
@@ -20,20 +23,20 @@ REQUIRED_VARS = (
     "POSTGRES_PASSWORD",
 )
 
+load_dotenv(PROJECT_ROOT / ".env")
+
 
 @dataclass(frozen=True)
 class DatabaseConfig:
-    """Parâmetros de conexão com o PostgreSQL."""
-
     host: str
     port: int
     dbname: str
     user: str
-    password: str = field(repr=False)  # nunca aparece em print/log
+    password: str = field(repr=False)  # fora do repr para não vazar em logs
 
 
 def get_db_config() -> DatabaseConfig:
-    """Lê as variáveis do banco e falha com mensagem clara se faltar alguma."""
+    """Lê as credenciais do .env e falha com mensagem clara se faltar alguma."""
     missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
     if missing:
         raise RuntimeError(
