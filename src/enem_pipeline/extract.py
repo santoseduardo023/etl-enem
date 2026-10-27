@@ -1,18 +1,22 @@
 """Extract: baixa o .zip do INEP (com cache) e extrai os CSVs para data/extracted/<ano>/."""
 
+import shutil
 import ssl
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 import requests
 import truststore
+import zipfile_inflate64  # noqa: F401  (adiciona suporte a Deflate64 ao zipfile)
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from enem_pipeline.config import ENEM_URLS, RAW_DIR
+from enem_pipeline.config import ENEM_URLS, EXTRACTED_DIR, RAW_DIR
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 TIMEOUT_SECONDS = 60
 INEP_HOST = "https://download.inep.gov.br/"
+DATA_FILES = ("PARTICIPANTES", "RESULTADOS", "ITENS_PROVA")
 
 # o servidor do INEP derruba conexões de forma intermitente
 RETRY_POLICY = Retry(
@@ -99,3 +103,55 @@ def download_zip(year: int) -> Path:
     partial.replace(destination)
     print(f"Download concluído: {destination}")
     return destination
+
+
+def _find_data_files(zf: zipfile.ZipFile, year: int) -> dict[str, str]:
+    """Mapeia cada tipo de arquivo de DATA_FILES para o seu caminho dentro do .zip."""
+    found = {}
+    for name in zf.namelist():
+        path = PurePosixPath(name)
+        if path.parent.name.upper() != "DADOS":
+            continue
+        for kind in DATA_FILES:
+            if path.name.upper() == f"{kind}_{year}.CSV":
+                found[kind] = name
+
+    missing = [kind for kind in DATA_FILES if kind not in found]
+    if missing:
+        raise FileNotFoundError(
+            f"Arquivos não encontrados no .zip de {year}: {', '.join(missing)}."
+        )
+    return found
+
+def extract_csvs(year: int) -> dict[str, Path]:
+    """Extrai os CSVs de dados do .zip do ano para data/extracted/<ano>/.
+
+    Pula arquivos já extraídos com o tamanho esperado. Grava num .part e
+    renomeia ao final, como no download.
+    """
+    zip_path = RAW_DIR / f"microdados_enem_{year}.zip"
+    if not zip_path.exists():
+        raise FileNotFoundError(f"{zip_path} não encontrado. Rode o download antes.")
+
+    out_dir = EXTRACTED_DIR / str(year)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    extracted = {}
+    with zipfile.ZipFile(zip_path) as zf:
+        for kind, name in _find_data_files(zf, year).items():
+            target = out_dir / PurePosixPath(name).name
+            expected_size = zf.getinfo(name).file_size
+
+            if target.exists() and target.stat().st_size == expected_size:
+                print(f"Cache: {target.name} já extraído.")
+            else:
+                print(f"Extraindo {target.name} ({expected_size / 1024**2:.0f} MB)")
+                partial = target.with_name(target.name + ".part")
+                with zf.open(name) as source, open(partial, "wb") as dest:
+                    shutil.copyfileobj(source, dest, CHUNK_SIZE)
+                partial.replace(target)
+
+            extracted[kind] = target
+
+    return extracted
+
