@@ -1,5 +1,5 @@
 """Extract: baixa o .zip do INEP (com cache) e extrai os CSVs para data/extracted/<ano>/."""
-
+import logging
 import shutil
 import ssl
 import zipfile
@@ -12,6 +12,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from enem_pipeline.config import ENEM_URLS, EXTRACTED_DIR, RAW_DIR
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 TIMEOUT_SECONDS = 60
@@ -75,11 +77,11 @@ def download_zip(year: int) -> Path:
         remote_size = _remote_size(session, url)
 
         if destination.exists() and destination.stat().st_size == remote_size:
-            print(f"Cache: {destination.name} já está completo, download ignorado.")
+            logger.info("Cache: %s já está completo, download ignorado.", destination.name)
             return destination
 
         size_mb = f"{remote_size / 1024**2:.0f} MB" if remote_size else "tamanho desconhecido"
-        print(f"Baixando {url} ({size_mb})")
+        logger.info("Baixando %s (%s)", url, size_mb)
         with session.get(url, stream=True, timeout=TIMEOUT_SECONDS) as response:
             response.raise_for_status()
             with open(partial, "wb") as file:
@@ -91,7 +93,7 @@ def download_zip(year: int) -> Path:
                     if remote_size:
                         percent = received * 100 // remote_size
                         if percent >= next_report:
-                            print(f"  {percent}% ({received / 1024**2:.0f} de {size_mb})")
+                            logger.info("Download: %d%% (%.0f de %s)", percent, received / 1024**2, size_mb)
                             next_report += 10
 
     downloaded = partial.stat().st_size
@@ -101,7 +103,7 @@ def download_zip(year: int) -> Path:
         )
 
     partial.replace(destination)
-    print(f"Download concluído: {destination}")
+    logger.info("Download concluído: %s", destination)
     return destination
 
 
@@ -143,9 +145,9 @@ def extract_csvs(year: int) -> dict[str, Path]:
             expected_size = zf.getinfo(name).file_size
 
             if target.exists() and target.stat().st_size == expected_size:
-                print(f"Cache: {target.name} já extraído.")
+                logger.info("Cache: %s já extraído.", target.name)
             else:
-                print(f"Extraindo {target.name} ({expected_size / 1024**2:.0f} MB)")
+                logger.info("Extraindo %s (%.0f MB)", target.name, expected_size / 1024**2)
                 partial = target.with_name(target.name + ".part")
                 with zf.open(name) as source, open(partial, "wb") as dest:
                     shutil.copyfileobj(source, dest, CHUNK_SIZE)

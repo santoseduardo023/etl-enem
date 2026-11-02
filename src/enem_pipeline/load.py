@@ -1,10 +1,15 @@
 """Load: cria as tabelas da bronze e carrega os CSVs do INEP com COPY."""
 
 import csv
+import logging
 import time
 from pathlib import Path
+
 from psycopg import sql
+
 from enem_pipeline.db import get_connection
+
+logger = logging.getLogger(__name__)
 
 CSV_ENCODING = "latin-1"
 CSV_DELIMITER = ";"
@@ -14,6 +19,7 @@ BRONZE_SCHEMA = "bronze"
 CONTROL_COLUMNS = sql.SQL(
     "_arquivo_origem text NOT NULL, _carregado_em timestamptz NOT NULL DEFAULT now()"
 )
+
 
 def read_header(csv_path: Path) -> list[str]:
     """Nomes das colunas do CSV, em minúsculas."""
@@ -43,7 +49,7 @@ def create_bronze_tables(year: int, csv_files: dict[str, Path]) -> None:
         for kind, csv_path in csv_files.items():
             table = table_name(kind, year)
             conn.execute(build_create_table(table, read_header(csv_path)))
-            print(f"Tabela {BRONZE_SCHEMA}.{table} pronta.")
+            logger.info("Tabela %s.%s pronta.", BRONZE_SCHEMA, table)
 
 
 def build_copy(table: str, columns: list[str]) -> sql.Composed:
@@ -59,7 +65,8 @@ def build_copy(table: str, columns: list[str]) -> sql.Composed:
 
 
 def load_csv(conn, table: str, csv_path: Path) -> int:
-    """Carrega um CSV na tabela da bronze via COPY e retorna o número de linhas."""
+    """Recarga idempotente via TRUNCATE + COPY, na transação de quem chama."""
+    conn.execute(sql.SQL("TRUNCATE {}").format(sql.Identifier(BRONZE_SCHEMA, table)))
     conn.execute(
         sql.SQL("ALTER TABLE {}.{} ALTER COLUMN _arquivo_origem SET DEFAULT {}").format(
             sql.Identifier(BRONZE_SCHEMA),
@@ -68,19 +75,28 @@ def load_csv(conn, table: str, csv_path: Path) -> int:
         )
     )
 
-    size_mb = csv_path.stat().st_size / 1024**2
-    print(f"Carregando {csv_path.name} ({size_mb:.0f} MB)...")
+    size = csv_path.stat().st_size
+    logger.info("Carregando %s (%.0f MB)...", csv_path.name, size / 1024**2)
 
     start = time.perf_counter()
     with conn.cursor() as cur:
-        with cur.copy(build_copy(table, read_header(csv_path))) as copy:
-            with open(csv_path, "rb") as file:
-                while data := file.read(CHUNK_SIZE):
-                    copy.write(data)
+        with (
+            cur.copy(build_copy(table, read_header(csv_path))) as copy,
+            open(csv_path, "rb") as file,
+        ):
+            sent = 0
+            next_report = 10
+            while data := file.read(CHUNK_SIZE):
+                copy.write(data)
+                sent += len(data)
+                percent = sent * 100 // size
+                if percent >= next_report:
+                    logger.info("%s: %d%%", table, percent)
+                    next_report += 10
         rows = cur.rowcount
     elapsed = time.perf_counter() - start
 
-    print(f"{BRONZE_SCHEMA}.{table}: {rows:,} linhas em {elapsed:.1f}s")
+    logger.info("%s.%s: %s linhas em %.1fs", BRONZE_SCHEMA, table, f"{rows:,}", elapsed)
     return rows
 
 

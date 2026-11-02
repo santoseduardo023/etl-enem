@@ -1,9 +1,14 @@
 """Cria o database e os schemas da arquitetura medallion (idempotente)."""
 
+import logging
+
 from psycopg import sql
 
 from enem_pipeline.config import PROJECT_ROOT, get_db_config
 from enem_pipeline.db import get_connection
+from enem_pipeline.logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 SQL_DIR = PROJECT_ROOT / "sql"
 
@@ -18,21 +23,22 @@ def create_database() -> None:
         ).fetchone()
 
         if exists:
-            print(f"Database '{dbname}' já existe, nada a fazer.")
+            logger.info("Database '%s' já existe, nada a fazer.", dbname)
             return
 
         conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dbname)))
-        print(f"Database '{dbname}' criado.")
+        logger.info("Database '%s' criado.", dbname)
 
 
 def create_schemas() -> None:
     script = SQL_DIR / "create_schemas.sql"
     with get_connection() as conn:
         conn.execute(script.read_text(encoding="utf-8"))
-    print("Schemas bronze, silver e gold prontos.")
+    logger.info("Schemas bronze, silver e gold prontos.")
 
 
 def main() -> None:
+    setup_logging()
     create_database()
     create_schemas()
 
