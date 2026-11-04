@@ -2,7 +2,7 @@
 
 Pipeline de engenharia de dados que transforma os microdados públicos do **ENEM 2024 e 2025** (INEP) em tabelas modeladas e prontas para análise, usando **arquitetura medallion** (bronze → silver → gold) no PostgreSQL.
 
-> **Status:** em desenvolvimento. Fundação (M0) e extração dos dados do INEP (M1) concluídas; próximas etapas no [roadmap](#roadmap).
+> **Status:** em desenvolvimento. Fundação (M0), extração (M1) e carga na bronze (M2) concluídas: o pipeline carrega os ~9,6 milhões de linhas do ENEM 2025 com um único comando. Próximas etapas no [roadmap](#roadmap).
 
 ## Sumário
 
@@ -31,7 +31,7 @@ Este projeto constrói um pipeline que:
 
 | Camada | Schema | Conteúdo | Ferramenta |
 |---|---|---|---|
-| **Bronze** | `bronze` | Cópia fiel dos CSVs do INEP: uma tabela por arquivo/ano, todas as colunas como texto | Python + `COPY` |
+| **Bronze** | `bronze` | Cópia fiel dos CSVs do INEP: uma tabela por arquivo/ano, todas as colunas como texto, mais colunas de linhagem | Python + `COPY` |
 | **Silver** | `silver` | Dados tipados, limpos, com 2024 e 2025 unidos e colunas curadas | dbt |
 | **Gold** | `gold` | Modelo dimensional (constelação) e tabelas largas (OBTs) para BI | dbt |
 
@@ -45,6 +45,7 @@ Este projeto constrói um pipeline que:
 | **zipfile-inflate64** | Suporte a Deflate64 na extração do `.zip` do INEP |
 | **psycopg 3** | Conexão com o PostgreSQL e carga via `COPY` |
 | **PostgreSQL 16** | Data warehouse local (schemas bronze, silver e gold) |
+| **ruff** | Lint e padronização do código |
 | **dbt-core** | Transformações silver e gold, testes e documentação _(em breve)_ |
 
 ## Como rodar
@@ -70,32 +71,36 @@ cp .env.example .env        # no PowerShell: Copy-Item .env.example .env
 # edite o .env e preencha POSTGRES_PASSWORD
 
 # 4. Criar o database e os schemas bronze/silver/gold (idempotente)
-uv run python -m enem_pipeline.setup_db
+uv run enem-pipeline setup
 
-# 5. Baixar os microdados do ENEM 2025 (~988 MB) e extrair os CSVs
-uv run python -c "from enem_pipeline.extract import download_zip, extract_csvs; download_zip(2025); extract_csvs(2025)"
+# 5. Rodar o pipeline: download, extração e carga na bronze
+uv run enem-pipeline run --ano 2025
 ```
 
-> Download e extração usam cache: arquivos já completos em `data/raw/` e `data/extracted/` não são processados de novo. A carga na bronze e um comando único para o pipeline inteiro entram no M2 (ver [roadmap](#roadmap)).
+Também é possível usar `uv run python -m enem_pipeline` no lugar de `uv run enem-pipeline`. Use `--help` em qualquer comando para ver as opções.
+
+> A primeira execução baixa ~1 GB e leva alguns minutos a mais. As seguintes usam o cache de `data/raw/` e `data/extracted/`, e a carga completa da bronze leva cerca de 13 minutos. Os logs ficam no terminal e em `logs/pipeline.log`.
 
 ## Estrutura do repositório
 
 ```
 etl-enem/
 ├── src/enem_pipeline/     # código Python do pipeline
+│   ├── cli.py             # comandos setup e run (ponto de entrada)
 │   ├── config.py          # leitura e validação do .env, pastas e URLs do INEP
 │   ├── db.py              # conexão com o PostgreSQL
 │   ├── setup_db.py        # cria database e schemas
 │   ├── extract.py         # download e extração dos CSVs do INEP
-│   ├── load.py            # carga na bronze com COPY
-│   └── cli.py             # comando único do pipeline
+│   ├── load.py            # DDL e carga na bronze com COPY
+│   └── logging_config.py  # logging no terminal e em arquivo
 ├── sql/                   # scripts SQL (DDL dos schemas)
 ├── dbt/models/            # transformações: staging, silver e gold
 ├── docs/                  # diagrama e decisões de arquitetura
 ├── tests/                 # testes automatizados
 ├── data/                  # dados do INEP, fora do Git (raw/ e extracted/)
+├── logs/                  # logs de execução, fora do Git
 ├── .env.example           # modelo de configuração
-└── pyproject.toml         # dependências do projeto
+└── pyproject.toml         # dependências e comando enem-pipeline
 ```
 
 ## Decisões técnicas
@@ -104,19 +109,25 @@ etl-enem/
 
 **Bronze como cópia fiel, tudo em texto.** A bronze não interpreta nada: guarda exatamente o que veio do INEP. A tipagem e a limpeza acontecem na silver, onde podem ser testadas e reprocessadas sem baixar os arquivos de novo.
 
+**DDL gerado pelo cabeçalho do CSV.** As tabelas da bronze são criadas a partir da primeira linha de cada arquivo, e não do dicionário de dados: a ordem real das colunas nos CSVs difere da documentação. Os nomes são passados ao banco via `psycopg.sql.Identifier`, sem montar SQL com f-strings.
+
+**Linhagem na bronze.** Cada linha carrega `_arquivo_origem` e `_carregado_em`, indicando de qual arquivo veio e quando entrou no banco.
+
 **Download em streaming, com cache e escrita atômica.** O arquivo de ~1 GB é baixado em pedaços de 1 MB, sem ocupar memória. O download é gravado num `.part` e só vira `.zip` quando termina e o tamanho confere com o `Content-Length` do servidor. Assim, um `.zip` em `data/raw/` é sempre um arquivo completo, e o cache pode confiar nele.
 
 **Conexão com o servidor do INEP.** O servidor de download só suporta até TLS 1.2, derruba conexões de forma intermitente e não envia a cadeia completa de certificados. O extract usa um adaptador HTTP específico para o INEP: limita o TLS a 1.2, valida o certificado com o repositório do sistema operacional (`truststore`) e repete as tentativas com backoff exponencial. A verificação do certificado nunca é desligada.
 
 **Extração seletiva e Deflate64.** Do `.zip` são extraídos só os 3 CSVs de dados, localizados por padrão de nome (`DADOS/<TIPO>_<ano>.csv`), e não por caminho fixo. A extração também usa cache e escrita atômica. O INEP comprime o `RESULTADOS` (~2 GB) com Deflate64, método que o `zipfile` do Python não suporta; o suporte vem da biblioteca `zipfile-inflate64`.
 
-**Carga com `COPY` em vez de pandas.** O `COPY` é o mecanismo nativo do PostgreSQL para carga em massa: envia o arquivo em streaming, sem montar DataFrames em memória, e é muito mais rápido que `INSERT`s gerados pelo `to_sql`.
+**Carga com `COPY` em vez de pandas.** O `COPY` é o mecanismo nativo do PostgreSQL para carga em massa: envia o arquivo em streaming, sem montar DataFrames em memória, e é muito mais rápido que `INSERT`s gerados pelo `to_sql`. A conversão de Latin-1 para UTF-8 é feita pelo próprio Postgres.
+
+**Carga idempotente e atômica.** Cada tabela é recarregada com `TRUNCATE` + `COPY`, e os 3 arquivos de um ano entram numa única transação. Rodar o pipeline várias vezes nunca duplica dados, e uma falha no meio desfaz tudo, sem deixar a bronze pela metade.
 
 **Restrição da LGPD na modelagem.** Desde 2024, os arquivos `PARTICIPANTES` (perfil socioeconômico) e `RESULTADOS` (notas) **não têm chave em comum**, por decisão do INEP para proteger a identidade dos participantes. Por isso, a gold usa uma **constelação com dois fatos** (`fato_participante` e `fato_resultado`) que só se cruzam de forma agregada (por município, UF e ano), nunca linha a linha.
 
 **Escopo 2024–2025.** São as duas edições com o mesmo layout simplificado de microdados, o que permite unir os anos na silver sem harmonização complexa.
 
-**Idempotência.** Todos os scripts podem ser executados várias vezes sem duplicar dados nem gerar erro (`IF NOT EXISTS`, cache de download e extração, recarga dentro de transação).
+**Observabilidade e códigos de saída.** O pipeline registra horário, nível e módulo de cada etapa, com progresso a cada 10% no download e na carga, no terminal e em arquivo. Erros são gravados com o traceback completo, e a CLI termina com código `1` em caso de falha (`130` se interrompida), para que um orquestrador saiba quando a execução falhou.
 
 **Credenciais fora do código.** Configurações ficam no `.env` (ignorado pelo Git), com validação na inicialização e mensagem clara se faltar alguma variável.
 
@@ -124,9 +135,9 @@ etl-enem/
 
 - [x] **M0 – Fundação:** estrutura, ambiente com uv, configuração via `.env`, database e schemas
 - [x] **M1 – Extract:** download dos microdados do INEP com cache e extração seletiva dos CSVs
-- [ ] **M2 – Load bronze:** carga com `COPY`, idempotente e com logging
+- [x] **M2 – Load bronze:** DDL a partir do cabeçalho, carga com `COPY` idempotente, logging e CLI única
 - [ ] **M3 – Inclusão de 2024:** carga e validação de layout entre os anos
 - [ ] **M4 – dbt silver:** tipagem, limpeza, união dos anos e testes básicos
 - [ ] **M5 – dbt gold:** modelo dimensional (constelação), OBTs e testes de qualidade
-- [ ] **M6 – Acabamento:** pytest, ruff, CI no GitHub Actions e documentação final
+- [ ] **M6 – Acabamento:** pytest, pre-commit, CI no GitHub Actions e documentação final
 - [ ] **v2 – Databricks:** migração para Delta Lake com orquestração em Workflows

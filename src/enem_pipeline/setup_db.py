@@ -6,7 +6,6 @@ from psycopg import sql
 
 from enem_pipeline.config import PROJECT_ROOT, get_db_config
 from enem_pipeline.db import get_connection
-from enem_pipeline.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +34,3 @@ def create_schemas() -> None:
     with get_connection() as conn:
         conn.execute(script.read_text(encoding="utf-8"))
     logger.info("Schemas bronze, silver e gold prontos.")
-
-
-def main() -> None:
-    setup_logging()
-    create_database()
-    create_schemas()
-
-
-if __name__ == "__main__":
-    main()

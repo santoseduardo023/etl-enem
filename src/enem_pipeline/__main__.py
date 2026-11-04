@@ -1,1 +1,5 @@
-"""Ponto de entrada: permite rodar `python -m enem_pipeline`. Vai chamar o cli.py."""
+"""Permite rodar o pipeline com `python -m enem_pipeline`."""
+
+from enem_pipeline.cli import main
+
+main()
