@@ -2,7 +2,7 @@
 
 Pipeline de engenharia de dados que transforma os microdados públicos do **ENEM 2024 e 2025** (INEP) em tabelas modeladas e prontas para análise, usando **arquitetura medallion** (bronze → silver → gold) no PostgreSQL.
 
-> **Status:** em desenvolvimento. Fundação (M0), extração (M1) e carga na bronze (M2) concluídas: o pipeline carrega os ~9,6 milhões de linhas do ENEM 2025 com um único comando. Próximas etapas no [roadmap](#roadmap).
+> **Status:** em desenvolvimento. Extração e carga na bronze concluídas para 2024 e 2025: ~18,3 milhões de linhas carregadas com um único comando por ano. Próximas etapas no [roadmap](#roadmap).
 
 ## Sumário
 
@@ -73,13 +73,14 @@ cp .env.example .env        # no PowerShell: Copy-Item .env.example .env
 # 4. Criar o database e os schemas bronze/silver/gold (idempotente)
 uv run enem-pipeline setup
 
-# 5. Rodar o pipeline: download, extração e carga na bronze
+# 5. Rodar o pipeline para cada ano: download, extração e carga na bronze
+uv run enem-pipeline run --ano 2024
 uv run enem-pipeline run --ano 2025
 ```
 
 Também é possível usar `uv run python -m enem_pipeline` no lugar de `uv run enem-pipeline`. Use `--help` em qualquer comando para ver as opções.
 
-> A primeira execução baixa ~1 GB e leva alguns minutos a mais. As seguintes usam o cache de `data/raw/` e `data/extracted/`, e a carga completa da bronze leva cerca de 13 minutos. Os logs ficam no terminal e em `logs/pipeline.log`.
+> A primeira execução de cada ano baixa o `.zip` do INEP (~0,5 a 1 GB) e leva alguns minutos a mais. As seguintes usam o cache de `data/raw/` e `data/extracted/`, e a carga completa de um ano na bronze leva de 10 a 15 minutos. Os logs ficam no terminal e em `logs/pipeline.log`.
 
 ## Estrutura do repositório
 
@@ -93,9 +94,9 @@ etl-enem/
 │   ├── extract.py         # download e extração dos CSVs do INEP
 │   ├── load.py            # DDL e carga na bronze com COPY
 │   └── logging_config.py  # logging no terminal e em arquivo
-├── sql/                   # scripts SQL (DDL dos schemas)
+├── sql/                   # DDL dos schemas e consultas de análise
 ├── dbt/models/            # transformações: staging, silver e gold
-├── docs/                  # diagrama e decisões de arquitetura
+├── docs/                  # diagrama e registro de decisões e investigações
 ├── tests/                 # testes automatizados
 ├── data/                  # dados do INEP, fora do Git (raw/ e extracted/)
 ├── logs/                  # logs de execução, fora do Git
@@ -117,7 +118,7 @@ etl-enem/
 
 **Conexão com o servidor do INEP.** O servidor de download só suporta até TLS 1.2, derruba conexões de forma intermitente e não envia a cadeia completa de certificados. O extract usa um adaptador HTTP específico para o INEP: limita o TLS a 1.2, valida o certificado com o repositório do sistema operacional (`truststore`) e repete as tentativas com backoff exponencial. A verificação do certificado nunca é desligada.
 
-**Extração seletiva e Deflate64.** Do `.zip` são extraídos só os 3 CSVs de dados, localizados por padrão de nome (`DADOS/<TIPO>_<ano>.csv`), e não por caminho fixo. A extração também usa cache e escrita atômica. O INEP comprime o `RESULTADOS` (~2 GB) com Deflate64, método que o `zipfile` do Python não suporta; o suporte vem da biblioteca `zipfile-inflate64`.
+**Extração seletiva e independente do empacotamento.** Do `.zip` são extraídos só os 3 CSVs de dados, localizados por padrão de nome (`DADOS/<TIPO>_<ano>.csv`), e não por caminho fixo. Os `.zip` do INEP usam métodos de compressão diferentes a cada ano (Stored, Deflate e Deflate64), e o extract trata todos da mesma forma; o suporte a Deflate64, ausente no `zipfile` do Python, vem da biblioteca `zipfile-inflate64`.
 
 **Carga com `COPY` em vez de pandas.** O `COPY` é o mecanismo nativo do PostgreSQL para carga em massa: envia o arquivo em streaming, sem montar DataFrames em memória, e é muito mais rápido que `INSERT`s gerados pelo `to_sql`. A conversão de Latin-1 para UTF-8 é feita pelo próprio Postgres.
 
@@ -125,7 +126,7 @@ etl-enem/
 
 **Restrição da LGPD na modelagem.** Desde 2024, os arquivos `PARTICIPANTES` (perfil socioeconômico) e `RESULTADOS` (notas) **não têm chave em comum**, por decisão do INEP para proteger a identidade dos participantes. Por isso, a gold usa uma **constelação com dois fatos** (`fato_participante` e `fato_resultado`) que só se cruzam de forma agregada (por município, UF e ano), nunca linha a linha.
 
-**Escopo 2024–2025.** São as duas edições com o mesmo layout simplificado de microdados, o que permite unir os anos na silver sem harmonização complexa.
+**Escopo 2024–2025 e layout comparado.** São as duas edições com o mesmo modelo simplificado de microdados. A comparação de colunas entre os anos mostrou uma única diferença: 28 colunas de notas da redação por avaliador, que existem só em 2025 e ficam fora da silver. Assim, a união dos anos não exige harmonização. Detalhes em [`docs/decisoes.md`](docs/decisoes.md).
 
 **Observabilidade e códigos de saída.** O pipeline registra horário, nível e módulo de cada etapa, com progresso a cada 10% no download e na carga, no terminal e em arquivo. Erros são gravados com o traceback completo, e a CLI termina com código `1` em caso de falha (`130` se interrompida), para que um orquestrador saiba quando a execução falhou.
 
@@ -136,7 +137,7 @@ etl-enem/
 - [x] **M0 – Fundação:** estrutura, ambiente com uv, configuração via `.env`, database e schemas
 - [x] **M1 – Extract:** download dos microdados do INEP com cache e extração seletiva dos CSVs
 - [x] **M2 – Load bronze:** DDL a partir do cabeçalho, carga com `COPY` idempotente, logging e CLI única
-- [ ] **M3 – Inclusão de 2024:** carga e validação de layout entre os anos
+- [x] **M3 – Inclusão de 2024:** carga do segundo ano sem mudanças no código e comparação de layout entre os anos
 - [ ] **M4 – dbt silver:** tipagem, limpeza, união dos anos e testes básicos
 - [ ] **M5 – dbt gold:** modelo dimensional (constelação), OBTs e testes de qualidade
 - [ ] **M6 – Acabamento:** pytest, pre-commit, CI no GitHub Actions e documentação final
