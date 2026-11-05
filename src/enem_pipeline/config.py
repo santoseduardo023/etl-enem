@@ -12,6 +12,7 @@ RAW_DIR = DATA_DIR / "raw"
 EXTRACTED_DIR = DATA_DIR / "extracted"
 
 ENEM_URLS = {
+    2024: "https://download.inep.gov.br/microdados/microdados_enem_2024.zip",
     2025: "https://download.inep.gov.br/microdados/microdados_enem_2025.zip",
 }
 
