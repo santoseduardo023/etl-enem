@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Microdados do ENEM carregados pelo pipeline Python, sem transformação.
+    schema: bronze
+    tables:
+      - name: participantes_2024
+      - name: participantes_2025
+      - name: resultados_2024
+      - name: resultados_2025
+      - name: itens_prova_2024
+      - name: itens_prova_2025

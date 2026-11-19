@@ -1,0 +1,1 @@
+{{ stg_resultados(2024) }}
